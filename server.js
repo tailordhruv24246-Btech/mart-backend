@@ -37,11 +37,13 @@ const allowedOrigins = [
   'http://localhost:5173', // Customer Frontend
   'http://localhost:5174', // Admin Frontend
   'http://localhost:5175', // Delivery Frontend
+  'https://sappymart-frontend.netlify.app', // Admin (Netlify)
+  'https://www.sappymart-frontend.netlify.app',
 ];
 
 const extraOrigins = (process.env.CORS_ORIGINS || '')
   .split(',')
-  .map((origin) => origin.trim())
+  .map((origin) => origin.trim().replace(/\/+$/, ''))
   .filter(Boolean);
 
 const localNetworkOriginPattern = /^https?:\/\/(localhost|127\.0\.0\.1|10(?:\.\d{1,3}){3}|172\.(?:1[6-9]|2\d|3[0-1])(?:\.\d{1,3}){2}|192\.168(?:\.\d{1,3}){2})(?::(5173|5174|5175))?$/;
@@ -59,7 +61,8 @@ app.use(cors({
     if (isAllowedOrigin(origin)) {
       return callback(null, true);
     }
-    return callback(new Error(`CORS policy: Origin ${origin} not allowed`));
+    // Do not throw here, otherwise browsers see a 500 on preflight.
+    return callback(null, false);
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
