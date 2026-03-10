@@ -1,6 +1,22 @@
 const mysql = require('mysql2/promise');
 require('dotenv').config();
 
+const buildSslConfig = () => {
+  const sslMode = String(process.env.DB_SSL_MODE || '').toUpperCase();
+  const sslEnabled = process.env.DB_SSL === 'true' || sslMode === 'REQUIRED';
+
+  if (!sslEnabled) return undefined;
+
+  const rejectUnauthorized = process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false';
+  const ca = process.env.DB_SSL_CA || process.env.DB_CA_CERT || undefined;
+
+  // Keep config env-driven so local and cloud DBs both work.
+  return {
+    rejectUnauthorized,
+    ...(ca ? { ca } : {}),
+  };
+};
+
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'localhost',
   port: Number(process.env.DB_PORT || 3306),
@@ -18,6 +34,7 @@ const pool = mysql.createPool({
   timezone: 'Z',
   enableKeepAlive: true,
   keepAliveInitialDelay: 10000,
+  ssl: buildSslConfig(),
 });
 
 pool.getConnection()
