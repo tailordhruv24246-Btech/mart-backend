@@ -279,7 +279,7 @@ const importProducts = async (req, res, next) => {
         }
 
         const [existing] = await db.query(
-          'SELECT id FROM products WHERE sku = ? OR (? <> "" AND barcode = ?) LIMIT 1',
+          "SELECT id FROM products WHERE sku = ? OR (? <> '' AND barcode = ?) LIMIT 1",
           [sku, barcode, barcode]
         );
         if (existing.length > 0) {
