@@ -48,31 +48,71 @@ const fileFilter = (_req, file, cb) => {
   else cb(new Error('Only image files are allowed.'));
 };
 
-const uploadProductImages = multer({
+const normalizeFiles = (files) => {
+  if (!files) return [];
+  if (Array.isArray(files)) return files;
+  if (typeof files === 'object') {
+    return Object.values(files)
+      .flat()
+      .filter(Boolean);
+  }
+  return [];
+};
+
+const createMultiFieldUpload = ({ storage, fieldNames, maxFiles = 5 }) => {
+  const upload = multer({
+    storage,
+    fileFilter,
+    limits: {
+      files: maxFiles,
+      fileSize: 5 * 1024 * 1024,
+    },
+  }).fields(fieldNames.map((name) => ({ name, maxCount: maxFiles })));
+
+  return (req, res, next) => {
+    upload(req, res, (err) => {
+      if (err) return next(err);
+      req.files = normalizeFiles(req.files).slice(0, maxFiles);
+      return next();
+    });
+  };
+};
+
+const createSingleFieldUpload = ({ storage, fieldNames }) => {
+  const upload = multer({
+    storage,
+    fileFilter,
+    limits: {
+      files: 1,
+      fileSize: 5 * 1024 * 1024,
+    },
+  }).fields(fieldNames.map((name) => ({ name, maxCount: 1 })));
+
+  return (req, res, next) => {
+    upload(req, res, (err) => {
+      if (err) return next(err);
+      const files = normalizeFiles(req.files);
+      req.file = files[0] || null;
+      req.files = files;
+      return next();
+    });
+  };
+};
+
+const uploadProductImages = createMultiFieldUpload({
   storage: productStorage,
-  fileFilter,
-  limits: {
-    files: 5,
-    fileSize: 5 * 1024 * 1024,
-  },
-}).array('image_files', 5);
+  fieldNames: ['image_files', 'image_files[]', 'images', 'images[]', 'image_file', 'image', 'files'],
+  maxFiles: 5,
+});
 
-const uploadCategoryImage = multer({
+const uploadCategoryImage = createSingleFieldUpload({
   storage: categoryStorage,
-  fileFilter,
-  limits: {
-    files: 1,
-    fileSize: 5 * 1024 * 1024,
-  },
-}).single('image_file');
+  fieldNames: ['image_file', 'image', 'file'],
+});
 
-const uploadSettingLogo = multer({
+const uploadSettingLogo = createSingleFieldUpload({
   storage: settingsStorage,
-  fileFilter,
-  limits: {
-    files: 1,
-    fileSize: 5 * 1024 * 1024,
-  },
-}).single('logo_file');
+  fieldNames: ['logo_file', 'logo', 'image_file', 'image'],
+});
 
 module.exports = { uploadProductImages, uploadCategoryImage, uploadSettingLogo };
