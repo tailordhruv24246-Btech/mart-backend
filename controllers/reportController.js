@@ -3,6 +3,14 @@ const { sendSuccess, sendError } = require('../utils/response');
 
 let dailyExpensesTableReady = false;
 
+const getDayRange = (dateString) => {
+  const datePart = String(dateString || '').slice(0, 10);
+  return [
+    `${datePart} 00:00:00`,
+    `${datePart} 23:59:59`,
+  ];
+};
+
 const ensureDailyExpensesTable = async () => {
   if (dailyExpensesTableReady) return;
 
@@ -30,6 +38,7 @@ const getDailySales = async (req, res, next) => {
   try {
     const { date } = req.query;
     const targetDate = date || new Date().toISOString().split('T')[0];
+    const [dayStart, dayEnd] = getDayRange(targetDate);
 
     const [summary] = await db.query(
       `SELECT
@@ -40,22 +49,22 @@ const getDailySales = async (req, res, next) => {
         SUM(CASE WHEN payment_method = 'cash' THEN total_amount ELSE 0 END) as cash_sales,
         SUM(CASE WHEN payment_method = 'card' THEN total_amount ELSE 0 END) as card_sales,
         SUM(CASE WHEN payment_method = 'upi' THEN total_amount ELSE 0 END) as upi_sales
-       FROM sales WHERE DATE(sale_date) = ?`,
-      [targetDate]
+       FROM sales WHERE sale_date BETWEEN ? AND ?`,
+      [dayStart, dayEnd]
     );
 
     const [profitData] = await db.query(
       `SELECT COALESCE(SUM(profit_amount), 0) as total_profit FROM sales_items si
-       JOIN sales s ON s.id = si.sale_id WHERE DATE(s.sale_date) = ?`,
-      [targetDate]
+       JOIN sales s ON s.id = si.sale_id WHERE s.sale_date BETWEEN ? AND ?`,
+      [dayStart, dayEnd]
     );
 
     const [topProducts] = await db.query(
       `SELECT si.product_name, SUM(si.quantity) as qty_sold, SUM(si.total_amount) as revenue
        FROM sales_items si JOIN sales s ON s.id = si.sale_id
-       WHERE DATE(s.sale_date) = ?
+       WHERE s.sale_date BETWEEN ? AND ?
        GROUP BY si.product_id, si.product_name ORDER BY qty_sold DESC LIMIT 10`,
-      [targetDate]
+      [dayStart, dayEnd]
     );
 
     return sendSuccess(res, {
@@ -114,6 +123,8 @@ const getProfitReport = async (req, res, next) => {
     const { from, to } = req.query;
     const fromDate = from || new Date(new Date().setDate(1)).toISOString().split('T')[0];
     const toDate = to || new Date().toISOString().split('T')[0];
+    const [fromStart] = getDayRange(fromDate);
+    const [, toEnd] = getDayRange(toDate);
 
     const [overallProfit] = await db.query(
       `SELECT
@@ -123,8 +134,8 @@ const getProfitReport = async (req, res, next) => {
         ROUND(SUM(si.profit_amount) / NULLIF(SUM(si.total_amount), 0) * 100, 2) as profit_margin_percent
        FROM sales_items si
        JOIN sales s ON s.id = si.sale_id
-       WHERE DATE(s.sale_date) BETWEEN ? AND ?`,
-      [fromDate, toDate]
+       WHERE s.sale_date BETWEEN ? AND ?`,
+      [fromStart, toEnd]
     );
 
     const [categoryProfit] = await db.query(
@@ -134,9 +145,9 @@ const getProfitReport = async (req, res, next) => {
        JOIN sales s ON s.id = si.sale_id
        JOIN products p ON p.id = si.product_id
        LEFT JOIN categories c ON c.id = p.category_id
-       WHERE DATE(s.sale_date) BETWEEN ? AND ?
+       WHERE s.sale_date BETWEEN ? AND ?
        GROUP BY p.category_id, c.name ORDER BY profit DESC`,
-      [fromDate, toDate]
+      [fromStart, toEnd]
     );
 
     return sendSuccess(res, {
@@ -242,21 +253,26 @@ const getDailyClosingReport = async (req, res, next) => {
 
     const { date } = req.query;
     const targetDate = date || new Date().toISOString().split('T')[0];
+    const [dayStart, dayEnd] = getDayRange(targetDate);
 
     const [posRows] = await db.query(
       `SELECT payment_method, COALESCE(SUM(total_amount), 0) as amount, COUNT(*) as transactions
        FROM sales
-       WHERE DATE(sale_date) = ?
+       WHERE sale_date BETWEEN ? AND ?
        GROUP BY payment_method`,
-      [targetDate]
+      [dayStart, dayEnd]
     );
 
     const [orderRows] = await db.query(
       `SELECT payment_method, COALESCE(SUM(total_amount), 0) as amount, COUNT(*) as orders
        FROM orders
-       WHERE status = 'delivered' AND DATE(COALESCE(delivered_at, created_at)) = ?
+       WHERE status = 'delivered'
+         AND (
+           (delivered_at IS NOT NULL AND delivered_at BETWEEN ? AND ?)
+           OR (delivered_at IS NULL AND created_at BETWEEN ? AND ?)
+         )
        GROUP BY payment_method`,
-      [targetDate]
+      [dayStart, dayEnd, dayStart, dayEnd]
     );
 
     const [[expenseSummary]] = await db.query(
@@ -331,7 +347,7 @@ const getReorderSuggestions = async (req, res, next) => {
          SELECT si.product_id, SUM(si.quantity) as qty_sold
          FROM sales_items si
          JOIN sales s ON s.id = si.sale_id
-         WHERE DATE(s.sale_date) >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+         WHERE s.sale_date >= (NOW() - INTERVAL ? DAY)
          GROUP BY si.product_id
        ) sales30 ON sales30.product_id = p.id
        LEFT JOIN (

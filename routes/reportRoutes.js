@@ -12,14 +12,17 @@ const {
 } = require('../controllers/reportController');
 const authMiddleware = require('../middleware/authMiddleware');
 const roleMiddleware = require('../middleware/roleMiddleware');
+const { responseCache, clearResponseCache } = require('../middleware/responseCache');
 
-router.get('/daily-sales', authMiddleware, roleMiddleware('admin', 'subadmin'), getDailySales);
-router.get('/monthly-sales', authMiddleware, roleMiddleware('admin', 'subadmin'), getMonthlySales);
-router.get('/profit', authMiddleware, roleMiddleware('admin', 'subadmin'), getProfitReport);
-router.get('/stock', authMiddleware, roleMiddleware('admin', 'subadmin'), getStockReport);
-router.get('/daily-closing', authMiddleware, roleMiddleware('admin', 'subadmin'), getDailyClosingReport);
-router.get('/expenses', authMiddleware, roleMiddleware('admin', 'subadmin'), getExpenseEntries);
-router.post('/expenses', authMiddleware, roleMiddleware('admin', 'subadmin'), addExpenseEntry);
-router.get('/reorder-suggestions', authMiddleware, roleMiddleware('admin', 'subadmin'), getReorderSuggestions);
+const clearReportCache = clearResponseCache(['/api/reports']);
+
+router.get('/daily-sales', authMiddleware, roleMiddleware('admin', 'subadmin'), responseCache(20), getDailySales);
+router.get('/monthly-sales', authMiddleware, roleMiddleware('admin', 'subadmin'), responseCache(30), getMonthlySales);
+router.get('/profit', authMiddleware, roleMiddleware('admin', 'subadmin'), responseCache(25), getProfitReport);
+router.get('/stock', authMiddleware, roleMiddleware('admin', 'subadmin'), responseCache(30), getStockReport);
+router.get('/daily-closing', authMiddleware, roleMiddleware('admin', 'subadmin'), responseCache(20), getDailyClosingReport);
+router.get('/expenses', authMiddleware, roleMiddleware('admin', 'subadmin'), responseCache(20), getExpenseEntries);
+router.post('/expenses', authMiddleware, roleMiddleware('admin', 'subadmin'), clearReportCache, addExpenseEntry);
+router.get('/reorder-suggestions', authMiddleware, roleMiddleware('admin', 'subadmin'), responseCache(30), getReorderSuggestions);
 
 module.exports = router;

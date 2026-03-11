@@ -28,6 +28,8 @@ const errorHandler = require('./middleware/errorHandler');
 const app = express();
 
 app.set('etag', 'strong');
+app.set('trust proxy', 1);
+app.disable('x-powered-by');
 app.use(compression());
 
 // ============================================================
@@ -151,6 +153,11 @@ app.use(errorHandler);
 const PORT = process.env.PORT || 5000;
 const HOST = process.env.HOST || '0.0.0.0';
 const httpServer = http.createServer(app);
+
+// Keep sockets alive longer so clients can reuse TCP connections.
+httpServer.keepAliveTimeout = Number(process.env.HTTP_KEEP_ALIVE_TIMEOUT_MS || 65000);
+httpServer.headersTimeout = Number(process.env.HTTP_HEADERS_TIMEOUT_MS || 66000);
+httpServer.requestTimeout = Number(process.env.HTTP_REQUEST_TIMEOUT_MS || 30000);
 
 initRealtime(httpServer, { isAllowedOrigin });
 
