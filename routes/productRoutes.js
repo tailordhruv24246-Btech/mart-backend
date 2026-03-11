@@ -15,6 +15,6 @@ router.get('/:id', responseCache(30), getProductById);
 router.post('/', authMiddleware, roleMiddleware('admin', 'subadmin'), clearProductCache, uploadProductImages, addProduct);
 router.post('/:id/batch', authMiddleware, roleMiddleware('admin', 'subadmin'), clearProductCache, addProductBatch);
 router.put('/:id', authMiddleware, roleMiddleware('admin', 'subadmin'), clearProductCache, uploadProductImages, updateProduct);
-router.delete('/:id', authMiddleware, roleMiddleware('admin'), clearProductCache, deleteProduct);
+router.delete('/:id', authMiddleware, roleMiddleware('admin', 'subadmin'), clearProductCache, deleteProduct);
 
 module.exports = router;
