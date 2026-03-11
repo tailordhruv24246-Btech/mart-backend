@@ -769,4 +769,52 @@ const deleteProduct = async (req, res, next) => {
   }
 };
 
-module.exports = { getAllProducts, getProductById, searchProducts, addProduct, importProducts, addProductBatch, updateProduct, deleteProduct };
+// DELETE /api/products/bulk
+const deleteProductsBulk = async (req, res, next) => {
+  try {
+    const ids = Array.isArray(req.body?.ids)
+      ? req.body.ids.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0)
+      : [];
+
+    if (!ids.length) {
+      return sendError(res, 'ids array is required.', 400);
+    }
+
+    const placeholders = ids.map(() => '?').join(',');
+    const [existing] = await db.query(
+      `SELECT id FROM products WHERE id IN (${placeholders}) AND is_active = 1`,
+      ids
+    );
+
+    if (!existing.length) {
+      return sendSuccess(res, { requested: ids.length, deleted: 0 }, 'No active products found for provided ids');
+    }
+
+    const existingIds = existing.map((row) => row.id);
+    const existingPlaceholders = existingIds.map(() => '?').join(',');
+    await db.query(
+      `UPDATE products SET is_active = 0 WHERE id IN (${existingPlaceholders})`,
+      existingIds
+    );
+
+    return sendSuccess(
+      res,
+      { requested: ids.length, deleted: existingIds.length, deleted_ids: existingIds },
+      'Products deleted (soft delete)'
+    );
+  } catch (error) {
+    next(error);
+  }
+};
+
+module.exports = {
+  getAllProducts,
+  getProductById,
+  searchProducts,
+  addProduct,
+  importProducts,
+  addProductBatch,
+  updateProduct,
+  deleteProduct,
+  deleteProductsBulk,
+};
