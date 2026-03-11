@@ -243,24 +243,18 @@ const importProducts = async (req, res, next) => {
         const barcode = normalizeText(getRowField(row, ['barcode']));
         const categoryName = normalizeText(getRowField(row, ['category']));
         const subcategoryName = normalizeText(getRowField(row, ['subcategory']));
-        const price = parseNumber(getRowField(row, ['price', 'sellingprice', 'selling_price']));
-        const mrpRaw = parseNumber(getRowField(row, ['mrp']), price);
-        const costRaw = parseNumber(getRowField(row, ['cost', 'purchaseprice', 'purchase_price']), price);
+        const _price = parseNumber(getRowField(row, ['price', 'sellingprice', 'selling_price']));
+        const _mrpRaw = parseNumber(getRowField(row, ['mrp']), _price);
+        const _costRaw = parseNumber(getRowField(row, ['cost', 'purchaseprice', 'purchase_price']), _price);
         const gstRate = parseNumber(getRowField(row, ['gstrate', 'gst_rate', 'taxrate', 'tax_rate']), 18);
-        const stock = parseNumber(getRowField(row, ['stock', 'qty', 'quantity']), 0);
+        const _stock = parseNumber(getRowField(row, ['stock', 'qty', 'quantity']), 0);
         const unit = normalizeText(getRowField(row, ['unit'])) || 'pcs';
         const brand = normalizeText(getRowField(row, ['brand']));
         const description = normalizeText(getRowField(row, ['description']));
 
-        if (!name || !sku || !Number.isFinite(price) || !Number.isFinite(stock)) {
+        if (!name || !sku) {
           failed += 1;
-          errors.push({ row: excelRowNo, message: 'Required fields missing: name, sku, price, stock' });
-          continue;
-        }
-
-        if (price <= 0 || stock < 0) {
-          failed += 1;
-          errors.push({ row: excelRowNo, message: 'price must be > 0 and stock must be >= 0' });
+          errors.push({ row: excelRowNo, message: 'Required fields missing: name, sku' });
           continue;
         }
 
@@ -330,17 +324,6 @@ const importProducts = async (req, res, next) => {
           [name, sku, barcode || null, categoryId, subcategoryId, composedDescription, unit, gstRate]
         );
 
-        const productId = insertProduct.insertId;
-        const safeMrp = Number.isFinite(mrpRaw) ? mrpRaw : price;
-        const safeCost = Number.isFinite(costRaw) ? costRaw : price;
-
-        await db.query(
-          `INSERT INTO product_batches
-            (product_id, batch_number, purchase_price, selling_price, mrp, quantity_purchased, quantity_remaining)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [productId, `IMP-${Date.now()}-${index + 1}`, safeCost, price, safeMrp, stock, stock]
-        );
-
         seenSku.add(skuKey);
         if (barcodeKey) seenBarcode.add(barcodeKey);
         success += 1;
@@ -370,7 +353,14 @@ const getAllProducts = async (req, res, next) => {
 
     if (category_id) { whereClause += ' AND p.category_id = ?'; params.push(category_id); }
     if (subcategory_id) { whereClause += ' AND p.subcategory_id = ?'; params.push(subcategory_id); }
-    if (is_active !== undefined) { whereClause += ' AND p.is_active = ?'; params.push(is_active); }
+
+    const hasIsActiveFilter = typeof is_active !== 'undefined' && is_active !== null && is_active !== '';
+    if (hasIsActiveFilter) {
+      whereClause += ' AND p.is_active = ?';
+      params.push(is_active);
+    } else {
+      whereClause += ' AND p.is_active = 1';
+    }
 
     const [[{ total }]] = await db.query(
       `SELECT COUNT(*) as total FROM products p WHERE ${whereClause}`,
@@ -494,7 +484,7 @@ const searchProducts = async (req, res, next) => {
           MAX(pb.selling_price) as current_price, MAX(pb.mrp) as mrp
          FROM products p
          LEFT JOIN product_batches pb ON pb.product_id = p.id AND pb.quantity_remaining > 0
-         WHERE p.barcode = ? GROUP BY p.id`,
+         WHERE p.barcode = ? AND p.is_active = 1 GROUP BY p.id`,
         [barcode]
       );
       return sendSuccess(res, products, 'Search results');
@@ -524,7 +514,7 @@ const searchProducts = async (req, res, next) => {
          WHERE quantity_remaining > 0
          GROUP BY product_id
        ) agg ON agg.product_id = p.id
-       WHERE p.name LIKE ? OR p.sku LIKE ? OR p.barcode LIKE ?
+      WHERE p.is_active = 1 AND (p.name LIKE ? OR p.sku LIKE ? OR p.barcode LIKE ?)
        ORDER BY p.created_at DESC
        LIMIT ?`,
       [`%${searchQuery}%`, `%${searchQuery}%`, `%${searchQuery}%`, limitNum]
