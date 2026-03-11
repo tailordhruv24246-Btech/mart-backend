@@ -207,6 +207,50 @@ const getRowField = (row, aliases) => {
   return undefined;
 };
 
+const parseYesNo = (value, fallback = 1) => {
+  if (typeof value === 'undefined' || value === null || value === '') return fallback;
+  const normalized = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'active'].includes(normalized)) return 1;
+  if (['0', 'false', 'no', 'inactive'].includes(normalized)) return 0;
+  return fallback;
+};
+
+const isValidDateOnly = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || '').trim());
+
+const getRowAttributes = (row) => {
+  const directAttributes = parseAttributesInput(
+    getRowField(row, ['attributes', 'attributes_json', 'attributesmap', 'attributes_map'])
+  );
+
+  const prefixedAttributes = Object.entries(row || {})
+    .map(([key, value]) => {
+      const normalized = String(key || '').trim().toLowerCase();
+      if (!normalized.startsWith('attribute_') && !normalized.startsWith('attr_')) return null;
+
+      const attributeKey = normalized.startsWith('attribute_')
+        ? normalized.slice('attribute_'.length)
+        : normalized.slice('attr_'.length);
+
+      if (!attributeKey || typeof value === 'undefined' || value === null || String(value).trim() === '') {
+        return null;
+      }
+
+      return {
+        key: attributeKey,
+        value: String(value),
+        valueType: detectAttributeType(value),
+      };
+    })
+    .filter(Boolean);
+
+  const combined = [...directAttributes, ...prefixedAttributes];
+  const dedup = new Map();
+  for (const item of combined) {
+    dedup.set(item.key, item);
+  }
+  return Array.from(dedup.values());
+};
+
 const allowedGstRates = new Set([0, 5, 12, 18, 28]);
 
 // POST /api/products/import
@@ -217,6 +261,7 @@ const importProducts = async (req, res, next) => {
 
     const [categoryRows] = await db.query('SELECT id, name FROM categories');
     const [subcategoryRows] = await db.query('SELECT id, category_id, name FROM subcategories');
+    const [supplierRows] = await db.query('SELECT id, name FROM suppliers');
 
     const categoryByName = new Map(
       categoryRows.map((category) => [String(category.name).trim().toLowerCase(), category])
@@ -224,6 +269,10 @@ const importProducts = async (req, res, next) => {
     const subcategoryByCatAndName = new Map(
       subcategoryRows.map((subcategory) => [`${subcategory.category_id}:${String(subcategory.name).trim().toLowerCase()}`, subcategory])
     );
+    const supplierByName = new Map(
+      supplierRows.map((supplier) => [String(supplier.name).trim().toLowerCase(), supplier])
+    );
+    const supplierInvoiceByKey = new Map();
 
     const seenSku = new Set();
     const seenBarcode = new Set();
@@ -243,14 +292,34 @@ const importProducts = async (req, res, next) => {
         const barcode = normalizeText(getRowField(row, ['barcode']));
         const categoryName = normalizeText(getRowField(row, ['category']));
         const subcategoryName = normalizeText(getRowField(row, ['subcategory']));
-        const _price = parseNumber(getRowField(row, ['price', 'sellingprice', 'selling_price']));
-        const _mrpRaw = parseNumber(getRowField(row, ['mrp']), _price);
-        const _costRaw = parseNumber(getRowField(row, ['cost', 'purchaseprice', 'purchase_price']), _price);
+        const price = parseNumber(getRowField(row, ['price', 'sellingprice', 'selling_price']));
+        const mrpRaw = parseNumber(getRowField(row, ['mrp']), price);
+        const costRaw = parseNumber(getRowField(row, ['cost', 'purchaseprice', 'purchase_price']), price);
         const gstRate = parseNumber(getRowField(row, ['gstrate', 'gst_rate', 'taxrate', 'tax_rate']), 18);
-        const _stock = parseNumber(getRowField(row, ['stock', 'qty', 'quantity']), 0);
+        const stockRaw = parseNumber(getRowField(row, ['stock', 'qty', 'quantity']), 0);
         const unit = normalizeText(getRowField(row, ['unit'])) || 'pcs';
         const brand = normalizeText(getRowField(row, ['brand']));
         const description = normalizeText(getRowField(row, ['description']));
+        const hsnCode = normalizeText(getRowField(row, ['hsn', 'hsn_code']));
+        const reorderLevel = Math.max(parseInt(getRowField(row, ['reorder_level', 'reorderlevel']), 10) || 0, 0);
+        const isActive = parseYesNo(getRowField(row, ['is_active', 'active']), 1);
+
+        const openingStock = Math.max(parseInt(stockRaw, 10) || 0, 0);
+        const sellingPrice = Number.isFinite(price) ? price : NaN;
+        const purchasePrice = Number.isFinite(costRaw) ? costRaw : NaN;
+        const mrp = Number.isFinite(mrpRaw) ? mrpRaw : (Number.isFinite(sellingPrice) ? sellingPrice : null);
+
+        const batchNumber = normalizeText(getRowField(row, ['batch_number', 'batch']));
+        const supplierName = normalizeText(getRowField(row, ['supplier', 'supplier_name']));
+        const invoiceNumber = normalizeText(getRowField(row, ['invoice_number', 'invoice', 'purchase_invoice']));
+        const invoiceDateRaw = normalizeText(getRowField(row, ['invoice_date', 'purchase_date']));
+        const expiryDateRaw = normalizeText(getRowField(row, ['expiry_date', 'expiry']));
+        const manufacturingDateRaw = normalizeText(getRowField(row, ['manufacturing_date', 'mfg_date']));
+        const attributes = getRowAttributes(row);
+
+        const invoiceDate = isValidDateOnly(invoiceDateRaw) ? invoiceDateRaw : new Date().toISOString().slice(0, 10);
+        const expiryDate = isValidDateOnly(expiryDateRaw) ? expiryDateRaw : null;
+        const manufacturingDate = isValidDateOnly(manufacturingDateRaw) ? manufacturingDateRaw : null;
 
         if (!name || !sku) {
           failed += 1;
@@ -261,6 +330,12 @@ const importProducts = async (req, res, next) => {
         if (!allowedGstRates.has(gstRate)) {
           failed += 1;
           errors.push({ row: excelRowNo, message: 'gstRate must be one of 0, 5, 12, 18, 28' });
+          continue;
+        }
+
+        if (openingStock > 0 && (!Number.isFinite(sellingPrice) || !Number.isFinite(purchasePrice))) {
+          failed += 1;
+          errors.push({ row: excelRowNo, message: 'For stock > 0, both price (selling) and cost (purchase) are required' });
           continue;
         }
 
@@ -319,10 +394,80 @@ const importProducts = async (req, res, next) => {
           .join(' | ') || null;
 
         const [insertProduct] = await db.query(
-          `INSERT INTO products (name, sku, barcode, category_id, subcategory_id, description, unit, tax_rate, reorder_level)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
-          [name, sku, barcode || null, categoryId, subcategoryId, composedDescription, unit, gstRate]
+          `INSERT INTO products (name, sku, barcode, category_id, subcategory_id, description, unit, tax_rate, hsn_code, reorder_level, is_active)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [name, sku, barcode || null, categoryId, subcategoryId, composedDescription, unit, gstRate, hsnCode || null, reorderLevel, isActive]
         );
+
+        if (attributes.length) {
+          await upsertProductAttributes(insertProduct.insertId, attributes);
+        }
+
+        let supplierId = null;
+        if (supplierName) {
+          const supplierKey = supplierName.toLowerCase();
+          let supplier = supplierByName.get(supplierKey);
+
+          if (!supplier) {
+            const [insertSupplier] = await db.query(
+              'INSERT INTO suppliers (name, is_active) VALUES (?, 1)',
+              [supplierName]
+            );
+            supplier = { id: insertSupplier.insertId, name: supplierName };
+            supplierByName.set(supplierKey, supplier);
+          }
+
+          supplierId = supplier.id;
+        }
+
+        let purchaseInvoiceId = null;
+        if (invoiceNumber && supplierId) {
+          const invoiceKey = `${supplierId}:${invoiceNumber.toLowerCase()}`;
+
+          if (supplierInvoiceByKey.has(invoiceKey)) {
+            purchaseInvoiceId = supplierInvoiceByKey.get(invoiceKey);
+          } else {
+            const [existingInvoice] = await db.query(
+              'SELECT id FROM supplier_invoices WHERE supplier_id = ? AND invoice_number = ? ORDER BY id DESC LIMIT 1',
+              [supplierId, invoiceNumber]
+            );
+
+            if (existingInvoice.length) {
+              purchaseInvoiceId = existingInvoice[0].id;
+            } else {
+              const [insertInvoice] = await db.query(
+                `INSERT INTO supplier_invoices (invoice_number, supplier_id, invoice_date, subtotal, tax_amount, discount_amount, total_amount, payment_status)
+                 VALUES (?, ?, ?, 0, 0, 0, 0, 'unpaid')`,
+                [invoiceNumber, supplierId, invoiceDate]
+              );
+              purchaseInvoiceId = insertInvoice.insertId;
+            }
+
+            supplierInvoiceByKey.set(invoiceKey, purchaseInvoiceId);
+          }
+        }
+
+        if (openingStock > 0) {
+          await db.query(
+            `INSERT INTO product_batches (
+              product_id, batch_number, purchase_price, selling_price, mrp,
+              quantity_purchased, quantity_remaining, expiry_date, manufacturing_date, supplier_id, purchase_invoice_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              insertProduct.insertId,
+              batchNumber || null,
+              purchasePrice,
+              sellingPrice,
+              mrp,
+              openingStock,
+              openingStock,
+              expiryDate,
+              manufacturingDate,
+              supplierId,
+              purchaseInvoiceId,
+            ]
+          );
+        }
 
         seenSku.add(skuKey);
         if (barcodeKey) seenBarcode.add(barcodeKey);
