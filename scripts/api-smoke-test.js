@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const base = process.env.API_BASE || 'https://mart-backend-jlfj.onrender.com';
+const base = process.env.API_BASE || 'http://localhost:5000';
 const routeDir = path.join(__dirname, '..', 'routes');
 
 const prefixMap = {

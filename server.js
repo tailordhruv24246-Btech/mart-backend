@@ -39,8 +39,6 @@ const allowedOrigins = [
   'http://localhost:5173', // Customer Frontend
   'http://localhost:5174', // Admin Frontend
   'http://localhost:5175', // Delivery Frontend
-  'https://sappymart-frontend.netlify.app', // Admin (Netlify)
-  'https://www.sappymart-frontend.netlify.app',
 ];
 
 const extraOrigins = (process.env.CORS_ORIGINS || '')
