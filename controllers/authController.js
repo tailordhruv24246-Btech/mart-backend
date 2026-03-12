@@ -34,7 +34,22 @@ const register = async (req, res, next) => {
 
     const token = generateToken({ id: result.insertId, email, role, name });
 
-    return sendSuccess(res, { token, user: { id: result.insertId, name, email, role } }, 'Registration successful', 201);
+    return sendSuccess(
+      res,
+      {
+        token,
+        user: {
+          id: result.insertId,
+          name,
+          email,
+          role,
+          phone: phone || null,
+          address: address || null,
+        },
+      },
+      'Registration successful',
+      201
+    );
   } catch (error) {
     next(error);
   }
@@ -111,4 +126,75 @@ const getMe = async (req, res, next) => {
   }
 };
 
-module.exports = { register, login, resetPassword, getMe };
+// PATCH /api/auth/me
+const updateMe = async (req, res, next) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) return sendError(res, 'Unauthorized.', 401);
+
+    const { name, email, phone, address } = req.body || {};
+    const [existingUsers] = await db.query('SELECT email, phone FROM users WHERE id = ?', [userId]);
+    if (!existingUsers.length) return sendError(res, 'User not found.', 404);
+    const currentUser = existingUsers[0];
+
+    if (typeof email !== 'undefined') {
+      const incomingEmail = String(email || '').trim().toLowerCase();
+      const currentEmail = String(currentUser.email || '').trim().toLowerCase();
+      if (incomingEmail && incomingEmail !== currentEmail) {
+        return sendError(res, 'Email cannot be changed.', 400);
+      }
+    }
+
+    if (typeof phone !== 'undefined') {
+      const incomingPhone = String(phone || '').trim();
+      const currentPhone = String(currentUser.phone || '').trim();
+      if (incomingPhone && incomingPhone !== currentPhone) {
+        return sendError(res, 'Phone number cannot be changed.', 400);
+      }
+    }
+
+    const fields = [];
+    const values = [];
+
+    if (typeof name === 'string') {
+      const cleanName = name.trim();
+      if (!cleanName) return sendError(res, 'Name cannot be empty.', 400);
+      fields.push('name = ?');
+      values.push(cleanName);
+    }
+
+    if (typeof address !== 'undefined') {
+      fields.push('address = ?');
+      values.push(address ? String(address).trim() : null);
+    }
+
+    if (fields.length === 0) {
+      return sendError(res, 'Only name and address can be updated.', 400);
+    }
+
+    values.push(userId);
+    await db.query(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`, values);
+
+    const [updatedRows] = await db.query(
+      'SELECT id, name, email, phone, role, address, profile_image, created_at FROM users WHERE id = ?',
+      [userId]
+    );
+
+    const updatedUser = updatedRows?.[0];
+
+    if (String(updatedUser?.role || '').toLowerCase() === 'customer') {
+      await db.query(
+        `UPDATE customers
+         SET name = ?, email = ?, phone = ?, address = ?
+         WHERE user_id = ?`,
+        [updatedUser.name, updatedUser.email, updatedUser.phone || null, updatedUser.address || null, userId]
+      );
+    }
+
+    return sendSuccess(res, updatedUser, 'Profile updated successfully');
+  } catch (error) {
+    next(error);
+  }
+};
+
+module.exports = { register, login, resetPassword, getMe, updateMe };
